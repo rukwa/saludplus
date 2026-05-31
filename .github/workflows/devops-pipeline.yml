@@ -1,0 +1,58 @@
+name: SaludPlus CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. ETAPA DE CALIDAD Y PRUEBAS
+  test-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Descargar Código
+      uses: actions/checkout@v4
+
+    
+    - name: Configurar JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Ejecutar Pruebas Unitarias Automatizadas
+      run: mvn test
+
+    # 2. ETAPA DE SEGURIDAD
+    - name: Escaneo de Seguridad con Snyk
+      uses: snyk/actions/maven@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high 
+
+  # 3. ETAPA DE CONSTRUCCIÓN Y DESPLIEGUE SIMULADO
+  build-and-deploy:
+    needs: test-and-scan # No se ejecuta si las pruebas o la seguridad fallan
+    runs-on: ubuntu-latest
+    steps:
+    - name: Descargar Código
+      uses: actions/checkout@v4
+
+    - name: Configurar Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Construir Imagen Docker (IE1)
+      run: |
+        docker build -t saludplus-service:${{ github.sha }} .
+        docker tag saludplus-service:${{ github.sha }} saludplus-service:latest
+
+    - name: Simular Despliegue en Entorno Cloud (IE4)
+      run: |
+        echo "Iniciando despliegue automatizado..."
+        docker compose up -d
+        echo "Verificando estado del contenedor..."
+        docker compose ps
+        echo "Trazabilidad exitosa para el commit: ${{ github.sha }}"

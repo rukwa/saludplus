@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  saludplus-service:
+    build: .
+    image: saludplus-service:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=production
+      
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
