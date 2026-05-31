@@ -5,7 +5,8 @@
 * Benjamin Sandoval
 
 ## Garantía de Calidad y Trazabilidad
-* **Trasabilidad:** Cada build de Docker se etiqueta con el hash del commit de GitHub (`${{ github.sha }}`), permitiendo saber exactamente qué versión del código está corriendo en el contenedor.
+* **Trasabilidad:** Se logró estructurar y automatizar con éxito el ciclo de vida del microservicio en GitHub Actions bajo el flujo 'SaludPlus CI/CD Pipeline', garantizando la trazabilidad de cada cambio desde el commit hasta las fases de empaquetado.
+
 * **Calidad:** No se permite ningún despliegue si las pruebas unitarias fallan.
 * **Seguridad (Gobernanza):** El análisis estático de Snyk bloquea de inmediato el pipeline si detecta vulnerabilidades de nivel 'Alto'. El contenedor corre bajo un usuario no-root (`USER 10001`).
 
