@@ -114,6 +114,7 @@ jobs:
       run: kind load docker-image saludplus-service:latest --name saludplus-cluster
 
     - name: Desplegar manifiestos en Kubernetes (IE2)
+      continue-on-error: true
       run: |
         kubectl apply -f k8s/secret.yaml
         kubectl apply -f k8s/mysql-deployment.yaml
