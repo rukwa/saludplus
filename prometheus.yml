@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Metricas en vivo del microservicio (requests HTTP, JVM, CPU, memoria, disponibilidad)
+  - job_name: 'saludplus-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['saludplus-service:8080']
+
+  # Metricas "puntuales" empujadas por el pipeline CI/CD (cobertura de pruebas,
+  # duracion del despliegue) - ver job quality-gate / build-and-deploy en
+  # .github/workflows/devops-pipeline.yml
+  - job_name: 'pushgateway'
+    honor_labels: true
+    static_configs:
+      - targets: ['pushgateway:9091']

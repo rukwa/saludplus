@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saludplus-deployment
+  labels:
+    app: saludplus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: saludplus
+  template:
+    metadata:
+      labels:
+        app: saludplus
+      annotations:
+        # Permite que un Prometheus desplegado dentro del cluster descubra
+        # y scrapee este pod automaticamente (observabilidad "out of the box").
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8080"
+    spec:
+      # Espera a que MySQL este aceptando conexiones antes de arrancar la app.
+      # Sin esto, Spring Boot falla al iniciar (no encuentra la BD) y el pod
+      # entra en CrashLoopBackOff hasta que k8s reintente varias veces.
+      initContainers:
+        - name: wait-for-mysql
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "until nc -z saludplus-mysql 3306; do echo esperando a mysql...; sleep 3; done"
+      containers:
+        - name: saludplus
+          image: saludplus-service:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://saludplus-mysql:3306/saludplus_db
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: saludplus-db-secret
+                  key: MYSQL_USER
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: saludplus-db-secret
+                  key: MYSQL_PASSWORD
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 45
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saludplus-service
+spec:
+  selector:
+    app: saludplus
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP

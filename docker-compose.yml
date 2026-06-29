@@ -4,18 +4,88 @@ services:
   saludplus-service:
     build: .
     image: saludplus-service:latest
+    container_name: saludplus-app
     ports:
       - "8080:8080"
     environment:
       - ENV=production
-      
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-      restart_policy:
-        condition: on-failure
+      - SPRING_DATASOURCE_URL=jdbc:mysql://saludplus-db:3306/saludplus_db
+      - SPRING_DATASOURCE_USERNAME=saludplus_user
+      - SPRING_DATASOURCE_PASSWORD=saludplus_pass
+    mem_limit: 512m
+    cpus: 0.50
+    restart: on-failure
+    depends_on:
+      saludplus-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  saludplus-db:
+    image: mysql:8.0
+    container_name: saludplus-mysql
+    environment:
+      MYSQL_DATABASE: saludplus_db
+      MYSQL_USER: saludplus_user
+      MYSQL_PASSWORD: saludplus_pass
+      MYSQL_ROOT_PASSWORD: root_pass
+    ports:
+      - "3306:3306"
+    mem_limit: 256m
+    cpus: 0.25
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "saludplus_user", "--password=saludplus_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - saludplus-db-data:/var/lib/mysql
+
+  # ===== EP3 - IE1: recolecta metricas del microservicio (via /actuator/prometheus) =====
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: saludplus-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - saludplus-service
+      - pushgateway
+    restart: on-failure
+
+  # ===== EP3 - IE3: recibe metricas "puntuales" que empuja el pipeline CI/CD
+  # (cobertura de pruebas, duracion del despliegue) para que tambien aparezcan en el dashboard =====
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: saludplus-pushgateway
+    ports:
+      - "9091:9091"
+    restart: on-failure
+
+  # ===== EP3 - IE3: dashboard personalizado con las metricas clave =====
+  grafana:
+    image: grafana/grafana:latest
+    container_name: saludplus-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    restart: on-failure
+
+volumes:
+  saludplus-db-data:
+    driver: local

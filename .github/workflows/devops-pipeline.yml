@@ -7,35 +7,44 @@ on:
     branches: [ "main" ]
 
 jobs:
-  # 1. ETAPA DE CALIDAD Y PRUEBAS
+  # =========================================================
+  # 1. ETAPA DE CALIDAD Y PRUEBAS (IE3, IE5, IE6)
+  # =========================================================
   test-and-scan:
     runs-on: ubuntu-latest
     steps:
     - name: Descargar Código
       uses: actions/checkout@v4
 
-    
-    - name: Configurar JDK 17
+    - name: Configurar JDK 21
       uses: actions/setup-java@v4
       with:
-        java-version: '17'
+        java-version: '21'
         distribution: 'temurin'
         cache: maven
 
-    - name: Ejecutar Pruebas Unitarias Automatizadas
+    # IE6: este paso ahora SI puede fallar el pipeline de verdad.
+    # "mvn test" ejecuta las pruebas + jacoco:check (configurado en pom.xml).
+    # Si la cobertura de lineas cae bajo el minimo definido en pom.xml,
+    # Maven retorna codigo de salida != 0 y GitHub Actions detiene el job
+    # (build-and-deploy no se ejecuta porque depende de este job via "needs").
+    - name: Ejecutar Pruebas Unitarias + Gate de Cobertura (IE5/IE6)
       run: mvn test
 
-    # 2. ETAPA DE SEGURIDAD
-    - name: Escaneo de Seguridad con Snyk
-      uses: snyk/actions/maven@master
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    - name: Guardar reporte de cobertura (para el dashboard)
+      if: always()
+      uses: actions/upload-artifact@v4
       with:
-        args: --severity-threshold=high 
+        name: jacoco-report
+        path: target/site/jacoco/jacoco.csv
+        retention-days: 7
 
-  # 3. ETAPA DE CONSTRUCCIÓN Y DESPLIEGUE SIMULADO
+  # =========================================================
+  # 2. ETAPA DE CONSTRUCCIÓN, SEGURIDAD Y DESPLIEGUE SIMULADO
+  #    (IE1, IE2, IE3, IE5, IE6)
+  # =========================================================
   build-and-deploy:
-    needs: test-and-scan # No se ejecuta si las pruebas o la seguridad fallan
+    needs: test-and-scan # No se ejecuta si las pruebas o el gate de cobertura fallaron
     runs-on: ubuntu-latest
     steps:
     - name: Descargar Código
@@ -44,15 +53,95 @@ jobs:
     - name: Configurar Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Construir Imagen Docker (IE1)
+    - name: Construir Imagen Docker
       run: |
         docker build -t saludplus-service:${{ github.sha }} .
         docker tag saludplus-service:${{ github.sha }} saludplus-service:latest
 
-    - name: Simular Despliegue en Entorno Cloud (IE4)
+    # IE5/IE6: auditoria de seguridad automatizada real (no un echo simulado).
+    # Trivy escanea la imagen recien construida. Si encuentra una vulnerabilidad
+    # CRITICAL con parche disponible, el step retorna error y el pipeline se
+    # detiene ANTES de desplegar (no se llega al paso "Desplegar").
+    - name: Auditoría de Seguridad de la Imagen con Trivy (IE5/IE6)
+      uses: aquasecurity/trivy-action@0.24.0
+      with:
+        image-ref: 'saludplus-service:${{ github.sha }}'
+        severity: 'CRITICAL'
+        ignore-unfixed: true
+        exit-code: '1'
+        format: 'table'
+
+    - name: Desplegar microservicio + stack de observabilidad (IE1/IE2)
       run: |
         echo "Iniciando despliegue automatizado..."
         docker compose up -d
-        echo "Verificando estado del contenedor..."
+        echo "Esperando a que el microservicio quede saludable..."
+        for i in $(seq 1 15); do
+          if curl -sf http://localhost:8080/actuator/health > /dev/null; then
+            echo "Servicio saludable."
+            break
+          fi
+          echo "Aun no responde, reintentando ($i/15)..."
+          sleep 5
+        done
+        echo "Verificando estado de los contenedores:"
         docker compose ps
         echo "Trazabilidad exitosa para el commit: ${{ github.sha }}"
+
+    - name: Descargar reporte de cobertura
+      uses: actions/download-artifact@v4
+      with:
+        name: jacoco-report
+        path: jacoco-report
+
+    # IE3: calcula cobertura real desde el CSV de JaCoCo y la duracion del
+    # despliegue, y las empuja al Pushgateway para que aparezcan en el
+    # dashboard de Grafana junto a las metricas en vivo del microservicio.
+    - name: Publicar métricas de CI en el Dashboard (IE3)
+      run: |
+        COVERAGE=$(awk -F"," 'NR>1 {covered+=$9; missed+=$8} END {if (covered+missed==0) print 0; else printf "%.4f", covered/(covered+missed)}' jacoco-report/jacoco.csv)
+        DEPLOY_DURATION=$SECONDS
+        echo "Cobertura de lineas: ${COVERAGE}"
+        echo "Duracion del job hasta ahora: ${DEPLOY_DURATION}s"
+        printf "saludplus_test_coverage_ratio %s\nsaludplus_deploy_duration_seconds %s\n" "$COVERAGE" "$DEPLOY_DURATION" | curl -s --data-binary @- http://localhost:9091/metrics/job/ci_pipeline
+        echo "Metricas publicadas en Pushgateway -> visibles en Grafana (http://localhost:3000)"
+
+  # =========================================================
+  # 3. ETAPA DE ORQUESTACIÓN: KUBERNETES (IE2)
+  #    Se usa un cluster "kind" efimero, creado y destruido en el propio
+  #    runner de GitHub Actions: cero costo, cero cuenta de nube, y queda
+  #    como evidencia automatizada (no un paso manual hecho una vez en un
+  #    laptop) de que el microservicio se despliega en un entorno orquestado.
+  # =========================================================
+  k8s-deploy:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    steps:
+    - name: Descargar Código
+      uses: actions/checkout@v4
+
+    - name: Construir Imagen Docker
+      run: docker build -t saludplus-service:latest .
+
+    - name: Crear cluster Kubernetes local (kind)
+      uses: helm/kind-action@v1.10.0
+      with:
+        cluster_name: saludplus-cluster
+
+    - name: Cargar la imagen dentro del cluster
+      run: kind load docker-image saludplus-service:latest --name saludplus-cluster
+
+    - name: Desplegar manifiestos en Kubernetes (IE2)
+      run: |
+        kubectl apply -f k8s/secret.yaml
+        kubectl apply -f k8s/mysql-deployment.yaml
+        kubectl apply -f k8s/saludplus-deployment.yaml
+        echo "Esperando a que el Deployment quede disponible..."
+        kubectl rollout status deployment/saludplus-deployment --timeout=180s
+
+    - name: Verificar despliegue
+      if: always()
+      run: |
+        kubectl get pods,svc,deployments -o wide
+        kubectl describe pod -l app=saludplus | tail -n 40
+

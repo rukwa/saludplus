@@ -32,6 +32,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                         .requestMatchers("/auth/**").permitAll()
                         .requestMatchers("/admin/**").hasRole("ADMIN")
+                        // EP3 - IE1: permite que Prometheus haga scraping y que el healthcheck
+                        // de Docker funcione sin pedir JWT (no expone datos de pacientes)
+                        .requestMatchers("/actuator/**").permitAll()
                         .requestMatchers("/api/v1/pacientes/**").permitAll()
 
 

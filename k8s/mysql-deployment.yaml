@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saludplus-mysql
+  labels:
+    app: saludplus-mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: saludplus-mysql
+  template:
+    metadata:
+      labels:
+        app: saludplus-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          envFrom:
+            - secretRef:
+                name: saludplus-db-secret
+          readinessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        # emptyDir: los datos se pierden si el pod se recrea. Es intencional:
+        # este es un entorno simulado/de pruebas para la evaluacion, no produccion.
+        - name: mysql-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saludplus-mysql
+spec:
+  selector:
+    app: saludplus-mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
