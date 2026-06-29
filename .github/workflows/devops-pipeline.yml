@@ -7,9 +7,9 @@ on:
     branches: [ "main" ]
 
 jobs:
-  # =========================================================
-  # 1. ETAPA DE CALIDAD Y PRUEBAS (IE3, IE5, IE6)
-  # =========================================================
+  
+  # 1. ETAPA DE CALIDAD Y PRUEBAS
+ 
   test-and-scan:
     runs-on: ubuntu-latest
     steps:
@@ -23,12 +23,7 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    # IE6: este paso ahora SI puede fallar el pipeline de verdad.
-    # "mvn test" ejecuta las pruebas + jacoco:check (configurado en pom.xml).
-    # Si la cobertura de lineas cae bajo el minimo definido en pom.xml,
-    # Maven retorna codigo de salida != 0 y GitHub Actions detiene el job
-    # (build-and-deploy no se ejecuta porque depende de este job via "needs").
-    - name: Ejecutar Pruebas Unitarias + Gate de Cobertura (IE5/IE6)
+    - name: Ejecutar Pruebas Unitarias + Gate de Cobertura 
       run: mvn test
 
     - name: Guardar reporte de cobertura (para el dashboard)
@@ -39,12 +34,9 @@ jobs:
         path: target/site/jacoco/jacoco.csv
         retention-days: 7
 
-  # =========================================================
   # 2. ETAPA DE CONSTRUCCIÓN, SEGURIDAD Y DESPLIEGUE SIMULADO
-  #    (IE1, IE2, IE3, IE5, IE6)
-  # =========================================================
   build-and-deploy:
-    needs: test-and-scan # No se ejecuta si las pruebas o el gate de cobertura fallaron
+    needs: test-and-scan
     runs-on: ubuntu-latest
     steps:
     - name: Descargar Código
@@ -58,12 +50,8 @@ jobs:
         docker build -t saludplus-service:${{ github.sha }} .
         docker tag saludplus-service:${{ github.sha }} saludplus-service:latest
 
-    # IE5/IE6: auditoria de seguridad automatizada real (no un echo simulado).
-    # Trivy escanea la imagen recien construida. Si encuentra una vulnerabilidad
-    # CRITICAL con parche disponible, el step retorna error y el pipeline se
-    # detiene ANTES de desplegar (no se llega al paso "Desplegar").
     - name: Auditoría de Seguridad de la Imagen con Trivy (IE5/IE6)
-      uses: aquasecurity/trivy-action@0.24.0
+      uses: aquasecurity/trivy-action@0.28.0
       with:
         image-ref: 'saludplus-service:${{ github.sha }}'
         severity: 'CRITICAL'
@@ -94,9 +82,7 @@ jobs:
         name: jacoco-report
         path: jacoco-report
 
-    # IE3: calcula cobertura real desde el CSV de JaCoCo y la duracion del
-    # despliegue, y las empuja al Pushgateway para que aparezcan en el
-    # dashboard de Grafana junto a las metricas en vivo del microservicio.
+
     - name: Publicar métricas de CI en el Dashboard (IE3)
       run: |
         COVERAGE=$(awk -F"," 'NR>1 {covered+=$9; missed+=$8} END {if (covered+missed==0) print 0; else printf "%.4f", covered/(covered+missed)}' jacoco-report/jacoco.csv)
@@ -106,13 +92,8 @@ jobs:
         printf "saludplus_test_coverage_ratio %s\nsaludplus_deploy_duration_seconds %s\n" "$COVERAGE" "$DEPLOY_DURATION" | curl -s --data-binary @- http://localhost:9091/metrics/job/ci_pipeline
         echo "Metricas publicadas en Pushgateway -> visibles en Grafana (http://localhost:3000)"
 
-  # =========================================================
   # 3. ETAPA DE ORQUESTACIÓN: KUBERNETES (IE2)
-  #    Se usa un cluster "kind" efimero, creado y destruido en el propio
-  #    runner de GitHub Actions: cero costo, cero cuenta de nube, y queda
-  #    como evidencia automatizada (no un paso manual hecho una vez en un
-  #    laptop) de que el microservicio se despliega en un entorno orquestado.
-  # =========================================================
+
   k8s-deploy:
     needs: build-and-deploy
     runs-on: ubuntu-latest
