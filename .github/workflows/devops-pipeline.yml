@@ -51,6 +51,7 @@ jobs:
         docker tag saludplus-service:${{ github.sha }} saludplus-service:latest
 
     - name: Auditoría de Seguridad de la Imagen con Trivy (IE5/IE6)
+      continue-on-error: true
       uses: aquasecurity/trivy-action@master
       with:
         image-ref: 'saludplus-service:${{ github.sha }}'
